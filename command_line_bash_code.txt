@@ -1,0 +1,100 @@
+This file contains the command line Bash commands used to analyse and process data as part of this project.
+
+# 1a. Evaluating sequence quality using FastQC
+
+# Load relevant module
+module add apps/fastqc/0.11.9
+
+# Run FastQC on both forward and reverse reads 
+fastqc coursework_R1.fastq coursework_R2.fastq
+
+# Unzip output files produced to visualise them 
+unzip coursework_R1_fastqc.zip
+unzip coursework_R2_fastqc.zip
+
+
+# 1b. i) Trim the reads to remove low quality bases and reasses sequence quality using FastQC
+
+# Load relevant module
+module load apps/trimmomatic/0.39
+
+# Trim reads with specified parameters
+java -jar /sw/apps/Trimmomatic-0.39/trimmomatic-0.39.jar PE coursework_R1.fastq coursework_R2.fastq 
+output_1_paired.fastq output_1_unpaired.fastq output_2_paired.fastq output_2_unpaired.fastq LEADING:3
+TRAILING:3 SLIDINGWINDOW:4:15
+
+# Assess trimmed read quality using FastQC
+fastqc output_1_paired.fastq output_2_paired.fastq
+
+
+# 1b. ii) Assemble the reads and calculate total length and N50
+
+# Load relevant modules
+module add lang/python/anaconda/3.8-2021-TW
+
+# Assemble the reads
+/sw/lang/anaconda.3.8-2021-TW/bin/megahit -1 output_1_paired.fastq -2 output_2_paired.fastq
+-o assembly_all_contigs
+
+# Access summary metrics in log file
+cd assembly_all_contigs
+less log
+
+# Run Quast on assembled contigs
+quast.py final.contigs.fa
+
+# Access Quast computed assembly metrics
+cd latest
+nano report.txt
+
+
+# 1b. iii) Calculate the Mean Coverage of the Assembled Contigs
+
+# Load relevant modules  
+module load apps/bwa/0.7.17
+module load apps/samtools/1.16 # the 1.16 version is needed to run the coverage argument later on
+
+# Index the contigs
+bwa index final.contigs.fa
+
+# Map paired-end reads to indexed contigs and output alignment in SAM format
+bwa mem final.contigs.fa ../coursework_R1.fastq ../coursework_R2.fastq -o myassembly.sam
+
+# Convert SAM file to BAM format
+samtools view -S -b myassembly.sam > myassembly.bam
+
+# Sort BAM file for processing
+samtools sort myassembly.bam  > myassembly_sorted.bam
+
+# Calculate summary statistics for each contig in sorted BAM file and output report 
+samtools coverage myassembly_sorted.bam  > coverage_report.txt
+
+# Compute and print the average depth of coverage across all contigs by averaging the values
+# in the 6th column of the coverage report 
+`awk 'NR > 1 {total += $6; count++} END {print total/count}' coverage_report.txt`
+
+# Compute and print the average coverage percentage across all contigs by averaging the values 
+# in the 7th column of the coverage report 
+`awk 'NR > 1 {total += $7; count++} END {print total/count}' coverage_report.txt`
+
+# Filter the dataset and repeat above code on filtered dataset
+awk 'NR == 1 || ($3 - $2 + 1) >= 500' coverage_report.txt > filtered_coverage_report.txt
+
+
+# 2. Compute how many sequences were sequenced in the sample
+
+# Load relevant modules- in this order
+module add lang/python/anaconda/3.8-2021-TW 
+module add lang/perl/5.30.0-bioperl-TW module 
+add apps/blast/2.2.31+
+
+# Run prokka on final assembled contigs
+prokka final.contigs.fa
+
+# Filter dataset to only include those with min length of N50
+# These sequences will be searched against NCBI BLAST
+awk '/^>/ {if (seqlen >= 120040) {print header; print seq}; header = $0; seq=""; seqlen=0; next}
+ {seq = seq $0; seqlen += length($0)} END {if (seqlen >= 120040) {print header; print seq}}' 
+final.contigs.fa > largest_contigs.fa
+
+
